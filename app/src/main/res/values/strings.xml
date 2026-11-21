@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">Minimal Todo</string>
+    <string name="notification_channel_name">Daily Task Reminders</string>
+    <string name="notification_channel_description">Reminders for tasks scheduled today</string>
+</resources>
