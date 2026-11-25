@@ -30,6 +30,12 @@ enum class FontSizeOption(val scale: Float, val label: String) {
     LARGE(1.16f, "Large")
 }
 
+enum class HapticStrength(val label: String) {
+    LOW("Low"),
+    MEDIUM("Medium"),
+    HIGH("High")
+}
+
 @Immutable
 @Entity(tableName = "tasks")
 data class TaskEntity(
@@ -40,8 +46,27 @@ data class TaskEntity(
     /** Bitmask for DayOfWeek: bit (dayOfWeek.value - 1), where Mon=1, Tue=2, ..., Sun=64 */
     val daysOfWeekMask: Int = 0,
     val oneTimeDateEpochDay: Long? = null,
-    val createdAtEpochDay: Long = LocalDate.now().toEpochDay()
+    val createdAtEpochDay: Long = LocalDate.now().toEpochDay(),
+    /** Comma-separated epochDay longs supporting multiple specific dates for ONE_TIME tasks */
+    val specificDatesCsv: String = "",
+    /** User-defined priority ordering on the Home screen */
+    val sortOrder: Int = 0
 ) {
+    fun specificEpochDays(): List<Long> {
+        val parsed = specificDatesCsv
+            .split(",")
+            .mapNotNull { it.trim().toLongOrNull() }
+            .distinct()
+            .sorted()
+        return if (parsed.isNotEmpty()) {
+            parsed
+        } else {
+            listOfNotNull(oneTimeDateEpochDay)
+        }
+    }
+
+    fun specificDates(): List<LocalDate> = specificEpochDays().map(LocalDate::ofEpochDay)
+
     fun isScheduledFor(date: LocalDate, respectCreationDate: Boolean = false): Boolean {
         if (respectCreationDate && date.toEpochDay() < createdAtEpochDay) {
             return false
@@ -52,8 +77,14 @@ data class TaskEntity(
                 val bit = 1 shl (date.dayOfWeek.value - 1)
                 (daysOfWeekMask and bit) != 0
             }
-            ScheduleType.ONE_TIME -> oneTimeDateEpochDay == date.toEpochDay()
+            ScheduleType.ONE_TIME -> date.toEpochDay() in specificEpochDays()
         }
+    }
+
+    fun isOneTimeFullyCompleted(completedEpochDays: Set<Long>): Boolean {
+        if (scheduleType != ScheduleType.ONE_TIME) return false
+        val scheduled = specificEpochDays()
+        return scheduled.isNotEmpty() && scheduled.all { it in completedEpochDays }
     }
 
     fun selectedDays(): Set<DayOfWeek> {
@@ -84,8 +115,20 @@ data class TaskEntity(
                 }
             }
             ScheduleType.ONE_TIME -> {
-                val date = oneTimeDateEpochDay?.let(LocalDate::ofEpochDay)
-                date?.format(DateTimeFormatter.ofPattern("MMM d, yyyy")) ?: "One time"
+                val dates = specificDates()
+                when {
+                    dates.isEmpty() -> "One time"
+                    dates.size == 1 -> dates.first().format(DateTimeFormatter.ofPattern("MMM d, yyyy"))
+                    dates.size <= 3 -> dates.joinToString(", ") {
+                        it.format(DateTimeFormatter.ofPattern("MMM d"))
+                    }
+                    else -> {
+                        val preview = dates.take(2).joinToString(", ") {
+                            it.format(DateTimeFormatter.ofPattern("MMM d"))
+                        }
+                        "$preview +${dates.size - 2} more"
+                    }
+                }
             }
         }
     }
@@ -97,6 +140,14 @@ data class TaskEntity(
                 mask = mask or (1 shl (day.value - 1))
             }
             return mask
+        }
+
+        fun csvFromDates(dates: List<LocalDate>): String {
+            return dates
+                .map { it.toEpochDay() }
+                .distinct()
+                .sorted()
+                .joinToString(",")
         }
     }
 }
@@ -128,7 +179,9 @@ data class UserSettingsEntity(
     val userName: String = "",
     val themeMode: ThemeMode = ThemeMode.SYSTEM,
     val notificationsEnabled: Boolean = false,
-    val fontSizeOption: FontSizeOption = FontSizeOption.MEDIUM
+    val fontSizeOption: FontSizeOption = FontSizeOption.MEDIUM,
+    val hapticsEnabled: Boolean = true,
+    val hapticsStrength: HapticStrength = HapticStrength.MEDIUM
 )
 
 class Converters {
@@ -149,4 +202,10 @@ class Converters {
 
     @TypeConverter
     fun toFontSizeOption(value: String): FontSizeOption = FontSizeOption.valueOf(value)
+
+    @TypeConverter
+    fun fromHapticStrength(value: HapticStrength): String = value.name
+
+    @TypeConverter
+    fun toHapticStrength(value: String): HapticStrength = HapticStrength.valueOf(value)
 }

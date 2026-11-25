@@ -1,5 +1,6 @@
 package com.personal.minimaltodo
 
+import android.content.res.Configuration
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
@@ -24,9 +25,11 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
@@ -35,11 +38,17 @@ import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.personal.minimaltodo.data.ThemeMode
+import com.personal.minimaltodo.data.ThemePrefs
 import com.personal.minimaltodo.ui.components.SegmentedPillControl
+import com.personal.minimaltodo.ui.haptics.HapticEngine
+import com.personal.minimaltodo.ui.haptics.LocalHapticEngine
 import com.personal.minimaltodo.ui.screens.HomeScreen
 import com.personal.minimaltodo.ui.screens.ReportScreen
 import com.personal.minimaltodo.ui.screens.SettingsScreen
 import com.personal.minimaltodo.ui.screens.TaskScreen
+import com.personal.minimaltodo.ui.theme.DarkMinimalPalette
+import com.personal.minimaltodo.ui.theme.LightMinimalPalette
 import com.personal.minimaltodo.ui.theme.LocalMinimalPalette
 import com.personal.minimaltodo.ui.theme.MinimalTodoTheme
 import com.personal.minimaltodo.ui.theme.MotionSpecs
@@ -54,34 +63,61 @@ enum class AppTab(val label: String) {
 class MainActivity : ComponentActivity() {
 
     private val viewModel: TodoViewModel by viewModels {
-        TodoViewModel.Factory((application as MinimalTodoApp).repository)
+        TodoViewModel.Factory(applicationContext, (application as MinimalTodoApp).repository)
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        enableEdgeToEdge()
+
+        val savedTheme = ThemePrefs.getThemeMode(this)
+        val systemIsDark = (resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) ==
+            Configuration.UI_MODE_NIGHT_YES
+        val initialDark = when (savedTheme) {
+            ThemeMode.DARK -> true
+            ThemeMode.LIGHT -> false
+            ThemeMode.SYSTEM -> systemIsDark
+        }
+        val initialBg = if (initialDark) DarkMinimalPalette.background else LightMinimalPalette.background
+        window.decorView.setBackgroundColor(initialBg.toArgb())
+
+        val initialBarStyle = if (initialDark) {
+            SystemBarStyle.dark(Color.Transparent.toArgb())
+        } else {
+            SystemBarStyle.light(Color.Transparent.toArgb(), Color.Transparent.toArgb())
+        }
+        enableEdgeToEdge(statusBarStyle = initialBarStyle, navigationBarStyle = initialBarStyle)
 
         setContent {
             val settings by viewModel.settings.collectAsStateWithLifecycle()
+            val hapticEngine = remember(settings.hapticsEnabled, settings.hapticsStrength) {
+                HapticEngine(
+                    context = applicationContext,
+                    enabled = settings.hapticsEnabled,
+                    strength = settings.hapticsStrength
+                )
+            }
 
-            MinimalTodoTheme(
-                themeMode = settings.themeMode,
-                fontSizeOption = settings.fontSizeOption
-            ) {
-                val palette = LocalMinimalPalette.current
-                SideEffect {
-                    val barStyle = if (palette.isDark) {
-                        SystemBarStyle.dark(Color.Transparent.toArgb())
-                    } else {
-                        SystemBarStyle.light(
-                            Color.Transparent.toArgb(),
-                            Color.Transparent.toArgb()
-                        )
+            CompositionLocalProvider(LocalHapticEngine provides hapticEngine) {
+                MinimalTodoTheme(
+                    themeMode = settings.themeMode,
+                    fontSizeOption = settings.fontSizeOption
+                ) {
+                    val palette = LocalMinimalPalette.current
+                    SideEffect {
+                        window.decorView.setBackgroundColor(palette.background.toArgb())
+                        val barStyle = if (palette.isDark) {
+                            SystemBarStyle.dark(Color.Transparent.toArgb())
+                        } else {
+                            SystemBarStyle.light(
+                                Color.Transparent.toArgb(),
+                                Color.Transparent.toArgb()
+                            )
+                        }
+                        enableEdgeToEdge(statusBarStyle = barStyle, navigationBarStyle = barStyle)
                     }
-                    enableEdgeToEdge(statusBarStyle = barStyle, navigationBarStyle = barStyle)
-                }
 
-                MinimalTodoRoot(viewModel = viewModel)
+                    MinimalTodoRoot(viewModel = viewModel)
+                }
             }
         }
     }
@@ -95,11 +131,12 @@ class MainActivity : ComponentActivity() {
 @Composable
 private fun MinimalTodoRoot(viewModel: TodoViewModel) {
     val palette = LocalMinimalPalette.current
+    val haptic = LocalHapticEngine.current
     val context = LocalContext.current
 
     val settings by viewModel.settings.collectAsStateWithLifecycle()
     val today by viewModel.today.collectAsStateWithLifecycle()
-    val allTasks by viewModel.allTasks.collectAsStateWithLifecycle()
+    val manageTaskItems by viewModel.manageTaskItems.collectAsStateWithLifecycle()
     val todayTasks by viewModel.todayTasks.collectAsStateWithLifecycle()
     val todayProgress by viewModel.todayProgress.collectAsStateWithLifecycle()
     val displayedMonth by viewModel.displayedMonth.collectAsStateWithLifecycle()
@@ -121,7 +158,6 @@ private fun MinimalTodoRoot(viewModel: TodoViewModel) {
             .navigationBarsPadding()
     ) {
         Column(modifier = Modifier.fillMaxSize()) {
-            // Smooth directional slide + fade transition between Task | Home | Report
             AnimatedContent(
                 targetState = currentTab,
                 transitionSpec = {
@@ -141,8 +177,9 @@ private fun MinimalTodoRoot(viewModel: TodoViewModel) {
             ) { tab ->
                 when (tab) {
                     AppTab.TASK -> TaskScreen(
-                        allTasks = allTasks,
+                        taskItems = manageTaskItems,
                         onAddTask = viewModel::addTask,
+                        onUpdateTask = viewModel::updateTask,
                         onDeleteTask = viewModel::deleteTask
                     )
 
@@ -153,6 +190,7 @@ private fun MinimalTodoRoot(viewModel: TodoViewModel) {
                         onToggleTask = { id, isCompleted ->
                             viewModel.toggleTaskCompletion(id, isCompleted)
                         },
+                        onReorderTasks = viewModel::reorderTodayTasks,
                         onOpenSettings = { showSettings = true }
                     )
 
@@ -164,13 +202,12 @@ private fun MinimalTodoRoot(viewModel: TodoViewModel) {
                         monthProgressMap = monthProgressMap,
                         onPreviousMonth = viewModel::previousMonth,
                         onNextMonth = viewModel::nextMonth,
-                        onSelectDate = viewModel::selectReportDate,
-                        onOpenSettings = { showSettings = true }
+                        onJumpToToday = viewModel::jumpToToday,
+                        onSelectDate = viewModel::selectReportDate
                     )
                 }
             }
 
-            // Bottom Navigation Bar: Task | Home | Report (Yaya12085 inspired pill toggle)
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -179,7 +216,12 @@ private fun MinimalTodoRoot(viewModel: TodoViewModel) {
                 SegmentedPillControl(
                     items = AppTab.entries,
                     selectedItem = currentTab,
-                    onSelect = { currentTab = it },
+                    onSelect = { tab ->
+                        if (tab != currentTab) {
+                            haptic.tick()
+                            currentTab = tab
+                        }
+                    },
                     labelProvider = { it.label },
                     height = 50.dp,
                     cornerRadius = 16.dp,
@@ -188,7 +230,6 @@ private fun MinimalTodoRoot(viewModel: TodoViewModel) {
             }
         }
 
-        // Smooth iOS-style slide-in Settings overlay (opened from Home or Report only)
         AnimatedVisibility(
             visible = showSettings,
             enter = slideInHorizontally(
@@ -208,6 +249,8 @@ private fun MinimalTodoRoot(viewModel: TodoViewModel) {
                     viewModel.updateNotificationsEnabled(context, enabled)
                 },
                 onUpdateFontSize = viewModel::updateFontSize,
+                onUpdateHapticsEnabled = viewModel::updateHapticsEnabled,
+                onUpdateHapticsStrength = viewModel::updateHapticsStrength,
                 onBack = { showSettings = false }
             )
         }

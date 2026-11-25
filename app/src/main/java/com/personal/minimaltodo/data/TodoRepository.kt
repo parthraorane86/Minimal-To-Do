@@ -16,6 +16,13 @@ class TodoRepository(
         it ?: UserSettingsEntity()
     }
 
+    val completedDatesByTaskId: Flow<Map<Long, Set<Long>>> = taskDao.observeAllCompletions().map { rows ->
+        rows.groupBy(
+            keySelector = { it.taskId },
+            valueTransform = { it.dateEpochDay }
+        ).mapValues { it.value.toSet() }
+    }
+
     fun observeCompletionsForDate(date: LocalDate): Flow<Set<Long>> {
         return taskDao.observeCompletionsForDate(date.toEpochDay()).map { list ->
             list.map { it.taskId }.toSet()
@@ -37,17 +44,19 @@ class TodoRepository(
         name: String,
         scheduleType: ScheduleType,
         selectedDays: Set<DayOfWeek>,
-        oneTimeDate: LocalDate?
+        oneTimeDates: List<LocalDate>
     ) {
         val trimmed = name.trim()
         if (trimmed.isEmpty()) return
 
+        val distinctDates = oneTimeDates.distinct().sorted()
         val resolvedType = when (scheduleType) {
             ScheduleType.WEEKLY -> if (selectedDays.isEmpty()) ScheduleType.DAILY else ScheduleType.WEEKLY
-            ScheduleType.ONE_TIME -> if (oneTimeDate == null) ScheduleType.DAILY else ScheduleType.ONE_TIME
+            ScheduleType.ONE_TIME -> if (distinctDates.isEmpty()) ScheduleType.DAILY else ScheduleType.ONE_TIME
             ScheduleType.DAILY -> ScheduleType.DAILY
         }
 
+        val minOrder = taskDao.getMinSortOrder()
         val entity = TaskEntity(
             name = trimmed,
             scheduleType = resolvedType,
@@ -57,13 +66,65 @@ class TodoRepository(
                 0
             },
             oneTimeDateEpochDay = if (resolvedType == ScheduleType.ONE_TIME) {
-                oneTimeDate?.toEpochDay()
+                distinctDates.firstOrNull()?.toEpochDay()
             } else {
                 null
             },
-            createdAtEpochDay = LocalDate.now().toEpochDay()
+            createdAtEpochDay = LocalDate.now().toEpochDay(),
+            specificDatesCsv = if (resolvedType == ScheduleType.ONE_TIME) {
+                TaskEntity.csvFromDates(distinctDates)
+            } else {
+                ""
+            },
+            sortOrder = minOrder - 1
         )
         taskDao.insertTask(entity)
+    }
+
+    suspend fun updateTask(
+        existing: TaskEntity,
+        name: String,
+        scheduleType: ScheduleType,
+        selectedDays: Set<DayOfWeek>,
+        oneTimeDates: List<LocalDate>
+    ) {
+        val trimmed = name.trim()
+        if (trimmed.isEmpty()) return
+
+        val distinctDates = oneTimeDates.distinct().sorted()
+        val resolvedType = when (scheduleType) {
+            ScheduleType.WEEKLY -> if (selectedDays.isEmpty()) ScheduleType.DAILY else ScheduleType.WEEKLY
+            ScheduleType.ONE_TIME -> if (distinctDates.isEmpty()) ScheduleType.DAILY else ScheduleType.ONE_TIME
+            ScheduleType.DAILY -> ScheduleType.DAILY
+        }
+
+        val updated = existing.copy(
+            name = trimmed,
+            scheduleType = resolvedType,
+            daysOfWeekMask = if (resolvedType == ScheduleType.WEEKLY) {
+                TaskEntity.maskFromDays(selectedDays)
+            } else {
+                0
+            },
+            oneTimeDateEpochDay = if (resolvedType == ScheduleType.ONE_TIME) {
+                distinctDates.firstOrNull()?.toEpochDay()
+            } else {
+                null
+            },
+            specificDatesCsv = if (resolvedType == ScheduleType.ONE_TIME) {
+                TaskEntity.csvFromDates(distinctDates)
+            } else {
+                ""
+            }
+        )
+        taskDao.updateTask(updated)
+    }
+
+    suspend fun updateTaskOrder(orderedTasks: List<TaskEntity>) {
+        val updated = orderedTasks.mapIndexed { index, task ->
+            task.copy(sortOrder = index)
+        }
+        taskDao.updateTasks(updated)
     }
 
     suspend fun deleteTask(task: TaskEntity) {

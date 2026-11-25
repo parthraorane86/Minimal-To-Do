@@ -1,12 +1,15 @@
 package com.personal.minimaltodo.ui.screens
 
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -49,6 +52,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
+import com.personal.minimaltodo.ui.haptics.LocalHapticEngine
 import com.personal.minimaltodo.ui.theme.LocalMinimalPalette
 import com.personal.minimaltodo.ui.theme.MotionSpecs
 import com.personal.minimaltodo.viewmodel.DayProgress
@@ -65,8 +69,8 @@ fun ReportScreen(
     monthProgressMap: Map<LocalDate, DayProgress>,
     onPreviousMonth: () -> Unit,
     onNextMonth: () -> Unit,
+    onJumpToToday: () -> Unit,
     onSelectDate: (LocalDate) -> Unit,
-    onOpenSettings: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val palette = LocalMinimalPalette.current
@@ -78,16 +82,6 @@ fun ReportScreen(
             .verticalScroll(scrollState)
             .padding(horizontal = 20.dp)
     ) {
-        Spacer(modifier = Modifier.height(12.dp))
-
-        // Top-left profile/settings icon (same as Home)
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            ProfileIconButton(onClick = onOpenSettings)
-        }
-
         Spacer(modifier = Modifier.height(20.dp))
 
         Text(
@@ -98,12 +92,10 @@ fun ReportScreen(
 
         Spacer(modifier = Modifier.height(18.dp))
 
-        // Today's animated Pie Chart Card
         TodayPieChartCard(progress = todayProgress)
 
         Spacer(modifier = Modifier.height(16.dp))
 
-        // Historical Progress Calendar Card
         CalendarHistoryCard(
             today = today,
             displayedMonth = displayedMonth,
@@ -111,12 +103,12 @@ fun ReportScreen(
             monthProgressMap = monthProgressMap,
             onPreviousMonth = onPreviousMonth,
             onNextMonth = onNextMonth,
+            onJumpToToday = onJumpToToday,
             onSelectDate = onSelectDate
         )
 
         Spacer(modifier = Modifier.height(14.dp))
 
-        // Selected day breakdown
         val selectedProgress = monthProgressMap[selectedDate] ?: DayProgress(selectedDate, emptyList())
         SelectedDayBreakdownCard(progress = selectedProgress)
 
@@ -171,7 +163,6 @@ private fun TodayPieChartCard(progress: DayProgress) {
                 val arcSize = Size(size.width - strokeWidth, size.height - strokeWidth)
                 val topLeft = Offset(inset, inset)
 
-                // Pending / track ring
                 drawArc(
                     color = palette.surface,
                     startAngle = 0f,
@@ -182,7 +173,6 @@ private fun TodayPieChartCard(progress: DayProgress) {
                     style = Stroke(width = strokeWidth, cap = StrokeCap.Round)
                 )
 
-                // Completed animated arc
                 val sweep = sweepAnim.value.coerceIn(0f, 360f)
                 if (sweep > 0.5f) {
                     drawArc(
@@ -269,13 +259,16 @@ private fun CalendarHistoryCard(
     monthProgressMap: Map<LocalDate, DayProgress>,
     onPreviousMonth: () -> Unit,
     onNextMonth: () -> Unit,
+    onJumpToToday: () -> Unit,
     onSelectDate: (LocalDate) -> Unit
 ) {
     val palette = LocalMinimalPalette.current
+    val haptic = LocalHapticEngine.current
     val monthTitle = remember(displayedMonth) {
         displayedMonth.format(DateTimeFormatter.ofPattern("MMMM yyyy"))
     }
     val weekdayLabels = remember { listOf("M", "T", "W", "T", "F", "S", "S") }
+    val showJumpToday = displayedMonth != YearMonth.from(today) || selectedDate != today
 
     Column(
         modifier = Modifier
@@ -296,7 +289,10 @@ private fun CalendarHistoryCard(
                     .size(34.dp)
                     .clip(CircleShape)
                     .background(palette.surface)
-                    .clickable(onClick = onPreviousMonth)
+                    .clickable {
+                        haptic.tick()
+                        onPreviousMonth()
+                    }
             ) {
                 Icon(
                     imageVector = Icons.Rounded.ChevronLeft,
@@ -306,11 +302,43 @@ private fun CalendarHistoryCard(
                 )
             }
 
-            Text(
-                text = monthTitle,
-                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
-                color = palette.textPrimary
-            )
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text(
+                    text = monthTitle,
+                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
+                    color = palette.textPrimary
+                )
+
+                AnimatedVisibility(
+                    visible = showJumpToday,
+                    enter = fadeIn(tween(160)) + scaleIn(MotionSpecs.snappySpring(), initialScale = 0.85f),
+                    exit = fadeOut(tween(140)) + scaleOut(tween(140), targetScale = 0.85f)
+                ) {
+                    Box(
+                        contentAlignment = Alignment.Center,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(palette.accent)
+                            .clickable(
+                                interactionSource = remember { MutableInteractionSource() },
+                                indication = null
+                            ) {
+                                haptic.tick()
+                                onJumpToToday()
+                            }
+                            .padding(horizontal = 8.dp, vertical = 4.dp)
+                    ) {
+                        Text(
+                            text = "Today",
+                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold),
+                            color = palette.onAccent
+                        )
+                    }
+                }
+            }
 
             Box(
                 contentAlignment = Alignment.Center,
@@ -318,7 +346,10 @@ private fun CalendarHistoryCard(
                     .size(34.dp)
                     .clip(CircleShape)
                     .background(palette.surface)
-                    .clickable(onClick = onNextMonth)
+                    .clickable {
+                        haptic.tick()
+                        onNextMonth()
+                    }
             ) {
                 Icon(
                     imageVector = Icons.Rounded.ChevronRight,
@@ -380,7 +411,10 @@ private fun CalendarHistoryCard(
                                     isSelected = isSelected,
                                     isToday = isToday,
                                     isFuture = isFuture,
-                                    onClick = { onSelectDate(date) },
+                                    onClick = {
+                                        haptic.tick()
+                                        onSelectDate(date)
+                                    },
                                     modifier = Modifier.weight(1f)
                                 )
                             } else {

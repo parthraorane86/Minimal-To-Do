@@ -5,21 +5,34 @@ import androidx.room.Delete
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
+import androidx.room.Update
 import kotlinx.coroutines.flow.Flow
 
 @Dao
 interface TaskDao {
-    @Query("SELECT * FROM tasks ORDER BY id DESC")
+    @Query("SELECT * FROM tasks ORDER BY sortOrder ASC, id DESC")
     fun observeAllTasks(): Flow<List<TaskEntity>>
 
-    @Query("SELECT * FROM tasks")
+    @Query("SELECT * FROM tasks ORDER BY sortOrder ASC, id DESC")
     suspend fun getAllTasksOnce(): List<TaskEntity>
+
+    @Query("SELECT COALESCE(MIN(sortOrder), 0) FROM tasks")
+    suspend fun getMinSortOrder(): Int
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertTask(task: TaskEntity): Long
 
+    @Update
+    suspend fun updateTask(task: TaskEntity)
+
+    @Update
+    suspend fun updateTasks(tasks: List<TaskEntity>)
+
     @Delete
     suspend fun deleteTask(task: TaskEntity)
+
+    @Query("SELECT * FROM task_completions")
+    fun observeAllCompletions(): Flow<List<TaskCompletionEntity>>
 
     @Query("SELECT * FROM task_completions WHERE dateEpochDay = :epochDay")
     fun observeCompletionsForDate(epochDay: Long): Flow<List<TaskCompletionEntity>>
